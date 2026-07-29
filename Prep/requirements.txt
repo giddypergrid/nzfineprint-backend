@@ -1,0 +1,6 @@
+requests>=2.31
+python-dotenv>=1.0
+psycopg[binary]>=3.1
+openai>=1.30
+sentence-transformers>=3.0
+pgvector>=0.3

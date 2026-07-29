@@ -1,0 +1,101 @@
+services:
+  # Postgres 17 with pgvector baked in — the one DB (rows + full-text + vectors)
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped                # survives a server reboot/crash
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    shm_size: 1gb                          # default 64MB is too small: parallel index builds (HNSW)
+                                           # fail with "could not resize shared memory segment"
+    ports:
+      - "127.0.0.1:5432:5432"             # localhost-only — never exposed to the public internet
+    volumes:
+      - pgdata:/var/lib/postgresql/data          # data survives restarts
+      - ./Prep/db/init:/docker-entrypoint-initdb.d:ro   # auto-runs *.sql here, in name order, ON FIRST BOOT ONLY (empty volume)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]   # $$ = literal $ inside the container's own shell
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Shared counter store for rate limiting (per-IP + global daily cap). In-memory, tiny, no
+  # persistence — counters are allowed to reset on restart. maxmemory caps it so it can't grow.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Live API — only reads the DB. Always on. Two workers, so rate-limit counters MUST be shared
+  # (Redis), and uvicorn's --limit-concurrency is the 503 flood-valve above the thread queue.
+  app:
+    build: ./app
+    restart: unless-stopped
+    env_file: ./app/.env            # DEEPSEEK_API_KEY, EMBED_API_KEY — read from the host, never baked into the image
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",
+              "--workers", "2", "--limit-concurrency", "25", "--backlog", "128",
+              "--timeout-keep-alive", "5"]
+    ports:
+      - "8000:8000"
+    healthcheck:
+      # No curl in python:3.12-slim — urllib is already there, so use that instead of adding a package.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy       # wait until Postgres is actually ready
+
+  # Offline jobs — pull / enrich / load / vectorize. Not a service: run on demand.
+  #   docker compose run --rm prep python -m pipeline.pull      # one stage
+  #   docker compose run --rm prep sh run_update.sh             # full update, same as the scheduler
+  prep:
+    build: ./Prep
+    env_file: ./Prep/.env                 # DIGITALNZ_API_KEY, DEEPSEEK_API_KEY, EMBED_* etc.
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    volumes:
+      - ./Prep/data:/app/data             # jsonl output lands on the host
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["jobs"]                     # excluded from `up` — run explicitly
+
+  # Scheduled daily update — runs run_update.sh (pull/load/enrich/vectorize) at 00:00 NZ.
+  # Same image and env as `prep`; supercronic holds the schedule (Prep/crontab).
+  # Enable only where you want the cron running (the always-on server), not the dev laptop:
+  #   docker compose --profile schedule up -d updater
+  updater:
+    build: ./Prep
+    restart: unless-stopped
+    init: true                             # tini as PID 1 reaps zombies; supercronic runs as its
+                                           # child, so supercronic's own reaper (which fatally fails
+                                           # to fork-exec in this sandbox) stays disabled.
+    env_file: ./Prep/.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      TZ: Pacific/Auckland                 # makes "0 0 * * *" mean midnight NZ even on a UTC host
+    volumes:
+      - ./Prep/data:/app/data             # keep the pull checkpoint across runs
+    command: ["supercronic", "/app/crontab"]
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["schedule"]                 # opt-in — excluded from a plain `up`
+
+volumes:
+  pgdata:
