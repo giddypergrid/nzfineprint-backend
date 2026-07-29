@@ -37,16 +37,20 @@ services:
   # (Redis), and uvicorn's --limit-concurrency is the 503 flood-valve above the thread queue.
   app:
     build: ./app
+    container_name: nzfineprint-app        # stable name so Caddy's reverse_proxy target doesn't change
     restart: unless-stopped
     env_file: ./app/.env            # DEEPSEEK_API_KEY, EMBED_API_KEY — read from the host, never baked into the image
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      ENABLE_DOCS: ${ENABLE_DOCS}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",
               "--workers", "2", "--limit-concurrency", "25", "--backlog", "128",
               "--timeout-keep-alive", "5"]
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"                      # internal only — Caddy reaches it over the shared `web` network
+    networks: [default, web]        # default: talks to db/redis; web: reachable by the Caddy container
     healthcheck:
       # No curl in python:3.12-slim — urllib is already there, so use that instead of adding a package.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
@@ -99,3 +103,8 @@ services:
 
 volumes:
   pgdata:
+
+networks:
+  default: {}
+  web:
+    external: true               # the shared network Caddy listens on (see caddy/docker-compose.yml on the server)
