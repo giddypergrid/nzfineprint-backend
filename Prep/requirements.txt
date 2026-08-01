@@ -1,6 +1,8 @@
-requests>=2.31
-python-dotenv>=1.0
-psycopg[binary]>=3.1
-openai>=1.30
-sentence-transformers>=3.0
-pgvector>=0.3
+# Every stage talks to its model over HTTP — nothing here runs a model locally, so there is no
+# torch/sentence-transformers. Dropping that one line took the image from ~3.5GB (it pulled the
+# whole CUDA stack onto a GPU-less server) to ~300MB. Keep it that way.
+requests>=2.31          # pull: DigitalNZ API
+python-dotenv>=1.0      # shared/config
+psycopg[binary]>=3.1    # load / enrich / vectorize: Postgres
+openai>=1.30            # enrich: DeepSeek, OpenAI-compatible
+pgvector>=0.3           # vectorize: register_vector adapter
