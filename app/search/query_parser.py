@@ -22,7 +22,7 @@ _MAX_KEYWORD_WORDS = 4  # at/under this -> keyword route; above -> LLM parse + s
 def looks_like_sentence(text: str) -> bool:
     """True if the query reads like natural language (needs LLM parsing), False if keyword-shaped.
     Word count only: short queries are name/term lookups, long ones are descriptions. A misrouted
-    short query still searches fine on the keyword side (whole-word match + trigram typo fallback)."""
+    short query still searches fine on the keyword side (exact phrase match over title + body)."""
     return len(text.split()) > _MAX_KEYWORD_WORDS
 
 
