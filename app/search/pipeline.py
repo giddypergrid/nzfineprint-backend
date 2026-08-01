@@ -10,7 +10,7 @@ from app.search.schemas import Filters, SearchResponse
 
 def run_search(query: str, filters: Filters, limit: int) -> SearchResponse:
     if not query_parser.looks_like_sentence(query):
-        rows, route = engine.search_keyword(query, filters, limit)   # route: keyword | keyword_fuzzy
+        rows, route = engine.search_keyword(query, filters, limit)   # route: keyword
         return SearchResponse(route=route, count=len(rows), results=rows)
 
     parsed = query_parser.parse_semantic_query(query)

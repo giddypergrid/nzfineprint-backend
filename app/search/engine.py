@@ -59,43 +59,49 @@ def _where(conditions: list[str]) -> str:
     return ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
 
-# Trigram fallback fires when full-text finds nothing (usually a typo). word_similarity finds
-# the best-matching word *portion* of the title, so a misspelled token still matches — unlike
-# whole-string similarity, which dilutes on common words ("removal"). See [[search-design]].
-TRIGRAM_THRESHOLD = 0.5   # min word_similarity to count as a fuzzy hit (0-1)
-
-
 def search_keyword(query: str, filters: Filters, limit: int) -> tuple[list[dict], str]:
-    """Full-text first (exact word stems). If that's empty — typically a typo — fall back to a
-    trigram fuzzy match on the title. Returns (rows, route) so callers can show which one hit."""
-    rows = _search_fulltext(query, filters, limit)
-    if rows:
-        return rows, "keyword"
-    return _search_trigram(query, filters, limit), "keyword_fuzzy"
+    """Exact phrase match, and nothing else — empty means the record genuinely has no such notice.
+
+    A trigram typo fallback used to run here and was removed: measured against the live 205k rows it
+    could not be separated from its own false positives by any threshold. "Bay Plumbing Limited"
+    scored 0.810 against HOULAHAN PLUMBING LIMITED while a real rescue ("Sacrd Hill" -> SACRED HILL
+    WINERY) scored only 0.643 — generic words carry most of the similarity, so a different company
+    outranks the right one. word_similarity, strict_word_similarity and per-company matching against
+    affected_parties all showed the same inversion; trigrams compare SETS, so word order can't help.
+    Naming a wrong company to someone checking their own name costs more than making them retype.
+    Returns (rows, route) so callers can still report which route answered."""
+    return _search_fulltext(query, filters, limit), "keyword"
 
 
 def _search_fulltext(query: str, filters: Filters, limit: int) -> list[dict]:
-    """plainto_tsquery is punctuation-safe (O'Brien, co.) and ANDs the words. 'simple' config (no
-    stemming) must match the search_vector column's config — see 02_indexes.sql.
+    """phraseto_tsquery requires the words ADJACENT ('bay' <-> 'plumbing'), not merely both present.
+    plainto_tsquery only ANDs them, which let a query match words borrowed from three different
+    companies inside one bulk-removal list: "Bay Plumbing Limited" hit a notice containing BAY
+    RADIATORS, AUCKLAND DRAINAGE PLUMBING SERVICES and 39 other LIMITEDs, none of them the company
+    searched for. Adjacency is what makes a zero-result answer trustworthy — and it still finds you
+    when you ARE genuinely listed, because the names sit contiguously in the body text.
+    Punctuation-safe (O'Brien, co.); 'simple' config (no stemming) must match search_vector's own
+    config — see 02_indexes.sql.
 
-    Rank = length-normalised ts_rank + significance - bulk-list penalty. Three problems, three terms:
+    Rank = length-normalised ts_rank + significance - bulk-list penalty:
       - Plain ts_rank counts term FREQUENCY, so a giant "800 companies to be removed" list (repeats a
         word dozens of times) buried the real single-company notice. The `1` flag divides by
         log(length) to undo that.
       - significance_score (0-100 -> 0-1) surfaces the notable event over routine filings.
       - BUT a mass strike-off of 10,521 companies is scored highly-significant AND happens to contain
         almost any name/word, so it rode significance back to the top. Its tell is LENGTH — a real
-        notice is a few hundred chars, a mass list is tens of thousands. So subtract a penalty that
-        maxes out (-1.0) for anything past ~20k chars, leaving real notices (<2k) barely touched.
+        notice is a few hundred chars, a mass list is tens of thousands. The penalty maxes out (-1.0)
+        past ~20k chars. Adjacency already handles multi-word queries; this still earns its keep on
+        SINGLE-word ones ("liquidation"), where a phrase is just the one term and can't discriminate.
     Verified: 'Du Val'/'Smiths City' return the real receivership first; 'liquidation' returns CBL,
     Blue Chip, Ruapehu; 'Sacred Hill'/'wine liquidation' no longer surface the bulk-removal lists."""
     params: dict = {"q": query, "limit": limit}
-    conditions = ["search_vector @@ plainto_tsquery('simple', %(q)s)"]
+    conditions = ["search_vector @@ phraseto_tsquery('simple', %(q)s)"]
     conditions += _filter_sql(filters, params)
 
     sql = f"""
         SELECT {_SELECT_COLS},
-               ts_rank(search_vector, plainto_tsquery('simple', %(q)s), 1)
+               ts_rank(search_vector, phraseto_tsquery('simple', %(q)s), 1)
                  + COALESCE(significance_score, 0) / 100.0
                  - LEAST(length(COALESCE(fulltext, '')) / 20000.0, 1.0) AS score
         FROM notices
@@ -108,59 +114,20 @@ def _search_fulltext(query: str, filters: Filters, limit: int) -> list[dict]:
         return cursor.fetchall()
 
 
-# Trigram fallback only runs on short, name-shaped titles. Long multi-company titles (dozens of
-# names concatenated) always contain *some* substring similar to any short query word, so trigram
-# false-matches on them — the documented "trigram degrades on long text" failure. A user fuzzy-
-# searching a company name means a short title, so this cap both fixes accuracy and matches intent.
-TRIGRAM_MAX_TITLE_LEN = 120
-
-
-def _search_trigram(query: str, filters: Filters, limit: int) -> list[dict]:
-    """Typo-tolerant fallback. EVERY meaningful query word must be word_similar to a title token
-    (AND) — that's what rejects coincidental hits — and only short titles are eligible. Ranked by
-    the sum of per-word similarities. See [[search-design]]: trigram is short-text-only."""
-    words = [w for w in query.split() if len(w) >= 3]   # skip tiny stopwords; they add noise
-    if not words:
-        return []
-
-    params: dict = {"thresh": TRIGRAM_THRESHOLD, "maxlen": TRIGRAM_MAX_TITLE_LEN, "limit": limit}
-    scores, each_strong = [], []
-    for i, word in enumerate(words):
-        key = f"w{i}"
-        params[key] = word
-        scores.append(f"word_similarity(%({key})s, title)")
-        each_strong.append(f"word_similarity(%({key})s, title) >= %(thresh)s")
-    sum_score = " + ".join(scores)                                 # rank: total match strength
-
-    # `<%` (word-similarity) gates use the trigram GIN index for fast entry; ANDed so every word
-    # must match, consistent with the explicit score checks (session threshold is set to match).
-    index_gates = [f"%({f'w{i}'})s <%% title" for i in range(len(words))]
-    conditions = ["length(title) <= %(maxlen)s",
-                  "(" + " AND ".join(index_gates) + ")",
-                  "(" + " AND ".join(each_strong) + ")"]
-    conditions += _filter_sql(filters, params)
-
-    sql = f"""
-        SELECT {_SELECT_COLS},
-               ({sum_score}) AS score
-        FROM notices
-        {_where(conditions)}
-        ORDER BY score DESC, date DESC
-        LIMIT %(limit)s
-    """
-    with _connect() as connection, connection.cursor() as cursor:
-        # Align the <% operator threshold with our explicit >= check (operator default is 0.6).
-        # SET takes no bound params; TRIGRAM_THRESHOLD is our own float constant, so inlining is safe.
-        cursor.execute(f"SET LOCAL pg_trgm.word_similarity_threshold = {TRIGRAM_THRESHOLD}")
-        cursor.execute(sql, params)
-        return cursor.fetchall()
-
-
 # Semantic score is cosine similarity (0-1). When the LLM also surfaced literal keywords, rows
 # whose text actually contains them get this flat bonus — so a match that is BOTH semantically
 # close and literally on-topic outranks one that's only close in vector space. Small on purpose:
 # vector meaning stays the primary signal, keywords only break near-ties.
 KEYWORD_BONUS = 0.1
+
+
+def _keyword_tsquery_input(keywords: list[str]) -> str:
+    """Build websearch_to_tsquery input: '"Hawkes Bay" or "wine"'. Quotes keep a multi-word keyword
+    a phrase instead of loose words; `or` is a real disjunction. The previous ' | '.join fed into
+    plainto_tsquery, which silently drops operators and ANDs everything — so the bonus quietly
+    required EVERY keyword to hit rather than any one."""
+    cleaned = (keyword.replace('"', " ").strip() for keyword in keywords)
+    return " or ".join(f'"{keyword}"' for keyword in cleaned if keyword)
 
 
 def search_semantic(semantic_query: str, filters: Filters, limit: int,
@@ -176,8 +143,8 @@ def search_semantic(semantic_query: str, filters: Filters, limit: int,
     # Hybrid: base cosine + KEYWORD_BONUS if the row's full-text matches the extracted keywords.
     bonus_sql = "0"
     if keywords:
-        params["kw"] = " | ".join(keywords)   # OR the terms — any keyword hit earns the bonus
-        bonus_sql = (f"(CASE WHEN search_vector @@ plainto_tsquery('simple', %(kw)s) "
+        params["kw"] = _keyword_tsquery_input(keywords)
+        bonus_sql = (f"(CASE WHEN search_vector @@ websearch_to_tsquery('simple', %(kw)s) "
                      f"THEN {KEYWORD_BONUS} ELSE 0 END)")
 
     sql = f"""
