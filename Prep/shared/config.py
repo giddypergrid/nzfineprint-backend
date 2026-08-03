@@ -46,6 +46,7 @@ START_YEAR = int(os.getenv("PULL_START_YEAR", "2000"))     # online archive begi
 DATA = ROOT / "data"
 NOTICES_FILE = DATA / "notices.jsonl"
 STATE_FILE = DATA / "notices.state.json"
+LOAD_STATE_FILE = DATA / "load.state.json"    # how far into the jsonl load has already got
 
 # --- Bucket-1 codes: single source of truth = reference/notice_types.json ---
 _TYPES = json.loads((ROOT / "reference" / "notice_types.json").read_text(encoding="utf-8"))["types"]
