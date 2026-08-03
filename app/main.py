@@ -21,12 +21,12 @@ from app.search.schemas import CorpusStats, Notice, SearchRequest, SearchRespons
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Cap the sync-endpoint worker threads per uvicorn worker. uvicorn's --limit-concurrency is the
-    503 flood-valve above this queue; this just sets how many run at once."""
+    """Cap sync-endpoint worker threads per uvicorn worker; --limit-concurrency is the 503 valve
+    above this queue."""
     try:
         anyio.to_thread.current_default_thread_limiter().total_tokens = cfg.API_THREADPOOL
     except Exception:
-        pass   # non-fatal tuning — default (40) is fine if this ever fails
+        pass   # tuning only — the default of 40 is fine
     yield
 
 
@@ -38,13 +38,11 @@ app = FastAPI(
     openapi_url="/openapi.json" if cfg.ENABLE_DOCS else None,
 )
 
-# Origins allowed to call this API cross-origin. Defaults to the local Vite dev server; set
-# CORS_ORIGINS (comma-separated) in production to the real frontend domain(s) instead.
+# Defaults to the local Vite dev server; set CORS_ORIGINS to the real domain(s) in production.
 app.add_middleware(CORSMiddleware, allow_origins=cfg.CORS_ORIGINS,
                    allow_methods=["*"], allow_headers=["*"])
 
-# Rate-limit dependency applied to the paid routes (/search, /ask, /ask/stream). Named once so the
-# route decorators stay readable.
+# Applied to the paid routes only. Named once to keep the decorators readable.
 _LIMITED = [Depends(ratelimit.enforce_rate_limits)]
 
 
@@ -55,15 +53,13 @@ def health():
 
 @app.get("/stats", response_model=CorpusStats)
 def stats():
-    """Size and date span of the record, for the UI to quote. Cached, and free of LLM cost, so it
-    stays outside the rate limiter."""
+    """Size and date span, for the UI to quote. Cached and LLM-free, so it stays unmetered."""
     return engine.corpus_stats()
 
 
 @app.get("/notices/{notice_id}", response_model=Notice)
 def notice(notice_id: str):
-    """One notice by id, so a result has its own address — the page survives a reload, a share and
-    the browser Back button. Pure DB read with no LLM cost, so like /stats it stays unmetered."""
+    """Gives a result its own address, so it survives a reload, a share and the Back button."""
     found = engine.get_notice(notice_id)
     if not found:
         raise HTTPException(status_code=404, detail="No notice with that id.")
@@ -72,8 +68,7 @@ def notice(notice_id: str):
 
 @app.post("/search", response_model=SearchResponse, dependencies=_LIMITED)
 def search(request: SearchRequest):
-    """Search notices. Keyword-shaped queries hit full-text directly; natural-language queries
-    are LLM-parsed into filters + a semantic phrase, then matched by embedding similarity."""
+    """Keyword-shaped queries hit full-text; sentences are LLM-parsed then matched by embedding."""
     try:
         return pipeline.run_search(request.q, request.filters, request.limit)
     except RuntimeError as error:            # e.g. semantic route with no embed key configured
@@ -82,8 +77,7 @@ def search(request: SearchRequest):
 
 @app.post("/ask", response_model=AskResponse, dependencies=_LIMITED)
 def ask(request: AskRequest):
-    """Ask the desk a question — runs the multi-step research agent and returns its stage-by-stage
-    narration, the final report, and the notices it read in full."""
+    """Runs the research agent, returning its narration, the report, and the notices it read."""
     steps: list[str] = []
     sources: list[dict] = []
     seen_source_ids: set[str] = set()
@@ -113,9 +107,8 @@ _STREAM_DONE = object()      # sentinel the agent thread puts on the queue when 
 
 @app.post("/ask/stream", dependencies=_LIMITED)
 async def ask_stream(request: AskRequest):
-    """Same research as /ask, but each stage line is pushed to the browser the moment the agent
-    actually does that lookup, instead of the whole batch landing at the end. Server-sent events:
-    {"type":"step"|"source"|"answer"|"error", ...} one per `data:` line."""
+    """Same research as /ask, but each stage line is pushed as it happens rather than in one batch
+    at the end. SSE: {"type":"step"|"source"|"answer"|"error", ...}, one per `data:` line."""
     ratelimit.acquire_ask_slot()             # 503 before we start work if the worker is at capacity
     events: queue.Queue = queue.Queue()
     seen_source_ids: set[str] = set()

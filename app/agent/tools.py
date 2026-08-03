@@ -1,6 +1,6 @@
-"""The four read-only tools the agent can call. Compact-by-default: list tools return headlines +
-ids, never fulltext. Full text only via get_notice. Backend owns every limit — the model never sets
-how much we fetch. Reuses the existing search engine for the fan-out tool.
+"""The four read-only tools the agent can call. Compact by default — list tools return headlines and
+ids, never fulltext, which comes only from get_notice. The backend owns every limit; the model asks
+but never sets how much is fetched.
 """
 from typing import Optional
 
@@ -11,10 +11,10 @@ from app import config as cfg
 from app.search import engine
 from app.search.schemas import Filters
 
-# Backend-owned caps. The model asks; these decide. Never let a tool argument raise them.
-SEARCH_LIMIT = 12          # rows returned to the agent per search (compact scan)
-HISTORY_LIMIT = 40         # max notices in one company timeline
-RELATED_LIMIT = 15         # max other notices surfaced for a related party
+# Never let a tool argument raise these.
+SEARCH_LIMIT = 12          # rows per search
+HISTORY_LIMIT = 40         # notices in one company timeline
+RELATED_LIMIT = 15         # notices surfaced for a related party
 
 _COMPACT_COLS = "id, date, headline, event_category, significance_score"
 
@@ -26,8 +26,8 @@ def _connect():
 def search_notices(query: str, event_category: Optional[str] = None,
                    action_taken: Optional[str] = None, date_from: Optional[str] = None,
                    date_to: Optional[str] = None, min_significance: Optional[int] = None) -> list[dict]:
-    """Wide, cheap scan. Returns compact rows (no fulltext) so the agent can triage many at once.
-    Runs through the same hybrid keyword/semantic engine as /search."""
+    """Wide, cheap scan through the same engine as /search — compact rows, so the agent can triage
+    many at once."""
     filters = Filters(event_category=event_category, action_taken=action_taken,
                       date_from=date_from, date_to=date_to, min_significance=min_significance)
     result = engine.search_keyword(query, filters, SEARCH_LIMIT) \
@@ -37,13 +37,13 @@ def search_notices(query: str, event_category: Optional[str] = None,
 
 
 def get_notice(notice_id: str) -> Optional[dict]:
-    """Drill into ONE notice — the full plain-language decode + source text + parties + link."""
+    """The only tool that returns fulltext."""
     return engine.get_notice(notice_id)
 
 
 def get_company_history(nzbn: Optional[str] = None, company_number: Optional[str] = None,
                         name: Optional[str] = None) -> list[dict]:
-    """Every notice for one entity, oldest-first — the timeline. Match by id first (exact), else name."""
+    """One entity's timeline, oldest-first. Matches on id where possible, name only as a fallback."""
     params: dict = {"limit": HISTORY_LIMIT}
     if nzbn:
         where, params["v"] = "nzbn = %(v)s", nzbn
@@ -60,8 +60,8 @@ def get_company_history(nzbn: Optional[str] = None, company_number: Optional[str
 
 
 def find_related_parties(notice_id: str) -> dict:
-    """From one notice, pull the named parties, then find other notices that also name any of them —
-    the entity-linking hop that surfaces repeat players."""
+    """The entity-linking hop: other notices naming any of this one's parties, which is what surfaces
+    repeat players."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT affected_parties FROM notices WHERE id = %(id)s", {"id": notice_id})
         row = cur.fetchone()
@@ -69,7 +69,7 @@ def find_related_parties(notice_id: str) -> dict:
         if not parties:
             return {"parties": [], "also_appearing": []}
 
-        # Any notice (other than this one) whose parties overlap — jsonb containment via ?| on text[].
+        # ?| is jsonb "overlaps any of these keys", against a text[] of the party names.
         cur.execute(
             f"""SELECT {_COMPACT_COLS}, affected_parties FROM notices
                 WHERE id <> %(id)s AND affected_parties ?| %(names)s
@@ -79,7 +79,7 @@ def find_related_parties(notice_id: str) -> dict:
 
 
 def _compact(row: dict, keep_title: bool = False) -> dict:
-    """Trim a row to the scannable fields. Keeps context small so multi-step stays affordable."""
+    """Trim to the scannable fields — small context is what keeps a multi-step run affordable."""
     out = {"id": row["id"], "date": str(row.get("date")), "headline": row.get("headline"),
            "category": row.get("event_category"), "significance": row.get("significance_score")}
     if keep_title:

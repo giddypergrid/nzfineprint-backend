@@ -1,13 +1,13 @@
 """
 Daily update: pull -> load -> enrich, in sequence. Brings the DB current with the Gazette.
 
-Each stage does ONLY the delta by design:
-  - pull   re-checks the current year and appends any newly-published notices to notices.jsonl
-  - load   upserts the jsonl into Postgres (ON CONFLICT id), so existing rows are untouched
-  - enrich fills only rows where enriched_at IS NULL (the ones pull/load just added)
+Every stage does only the delta:
+  - pull   re-checks the current year, appending new notices to notices.jsonl
+  - load   upserts on id, so existing rows are untouched
+  - enrich fills only rows where enriched_at IS NULL
 
-Safe to run repeatedly — a day with no new notices is a near no-op. Any stage failing stops
-the run (don't enrich against a half-loaded DB); re-running resumes cleanly.
+Safe to repeat; a quiet day is a near no-op. A failing stage stops the run so nothing enriches
+against a half-loaded DB.
 
 Run from the Prep/ folder, or schedule it (cron / Task Scheduler):
   python -m pipeline.update

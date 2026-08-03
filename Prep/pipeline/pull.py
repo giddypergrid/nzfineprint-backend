@@ -1,13 +1,11 @@
 """
-Pull ALL Gazette notices from DigitalNZ into ONE jsonl file — no filtering or bucketing here;
-that is a later stage. We save every notice raw (id fields + full body), so nothing is thrown away
-and other categories stay available without a re-pull.
+Pull ALL Gazette notices from DigitalNZ into one jsonl. No filtering here — every notice is saved
+raw, so other categories stay available without a re-pull.
 
-Each record is fetched once WITH its full text, so every row carries both the id fields and the body.
-Resumable: the state remembers the last committed byte, so a re-run truncates any half-written tail
-and continues. Forward-only: past years are frozen; the current year is re-checked each run.
+Resumable: the state file remembers the last committed byte, so a re-run truncates a half-written
+tail and continues. Forward-only — past years are frozen, the current year is re-checked each run.
 
-Run from the Prep/ folder (locally), or via `docker compose run --rm prep ...`:
+Run from Prep/, or via `docker compose run --rm prep ...`:
   python -m pipeline.pull               # resume from the state file -> current year
   python -m pipeline.pull --until 2005  # resume -> through 2005, then stop
   python -m pipeline.pull --reset       # wipe and start over from the beginning

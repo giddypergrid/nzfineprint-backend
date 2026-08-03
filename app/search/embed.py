@@ -1,13 +1,8 @@
-"""Embed a search query into a 1024-dim vector via a hosted embedding endpoint.
+"""Embed a query into a 1024-dim vector. The one place the embedding backend is chosen — hosted, so
+the server holds zero model weight; swap this body to change it.
 
-This is the ONE place the embedding backend is chosen. Today it's a hosted OpenAI-compatible API
-(OpenRouter, model baai/bge-m3) so the server holds zero model weight. To switch to an in-process
-model or a self-hosted endpoint, replace only this function's body — nothing else in the app changes.
-
-bge-m3 takes NO instruction prefix, and Prep/pipeline/vectorize.py embeds documents the same way.
-Both sides must always use the same model AND the same prefix convention: bge-*-en-v1.5 models need
-an asymmetric query/passage prefix pair, bge-m3 needs none. Mismatching them does not raise — it
-quietly returns worse results.
+Must match Prep/pipeline/vectorize.py in BOTH model and prefix convention (bge-m3 takes no prefix,
+bge-*-en-v1.5 needs a query/passage pair). A mismatch doesn't raise, it just returns worse results.
 """
 from functools import lru_cache
 

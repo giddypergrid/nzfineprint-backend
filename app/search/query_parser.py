@@ -1,13 +1,10 @@
-"""Turn a raw search box string into a routing decision + (for natural-language queries) filters.
+"""Route a search-box string, and LLM-parse the sentence-shaped ones into filters.
 
-Two routes:
-  keyword    — short, name/term-shaped. No LLM. Words map straight to the full-text index.
-  semantic   — sentence-shaped ("a wine business that had to appoint someone..."). An LLM
-               (DeepSeek, same as enrichment) extracts hard filters + a cleaned semantic phrase,
-               because the filter intent is implied, not literally present as index-matchable words.
+  keyword   — name/term-shaped. No LLM; words map straight to the full-text index.
+  semantic  — sentence-shaped. DeepSeek extracts the implied filters, which aren't present as
+              index-matchable words, plus a cleaned phrase to embed.
 
-Routing is word-count only (<=4 words -> keyword): keeps the LLM off the majority of real queries
-(people type 2-3 words), so most searches are near-instant and free.
+Routing is word count alone, which keeps the LLM off most real queries — so they stay free and fast.
 """
 import json
 from functools import lru_cache
@@ -21,9 +18,8 @@ _MAX_KEYWORD_WORDS = 3  # at/under this -> keyword route; above -> LLM parse + s
 
 
 def looks_like_sentence(text: str) -> bool:
-    """True if the query reads like natural language (needs LLM parsing), False if keyword-shaped.
-    Word count only: short queries are name/term lookups, long ones are descriptions. A misrouted
-    short query still searches fine on the keyword side (exact phrase match over title + body)."""
+    """Short queries are name lookups, long ones are descriptions. A misrouted short query still
+    searches fine as an exact phrase, so the cheap heuristic is safe."""
     return len(text.split()) > _MAX_KEYWORD_WORDS
 
 
@@ -49,12 +45,9 @@ Respond with ONLY the JSON object. No preamble, no code fences."""
 
 
 def parse_semantic_query(text: str) -> dict:
-    """LLM-parse a natural-language query into {semantic_query, event_category, action_taken, keywords}.
-    Falls back to a filter-free semantic search if the model/JSON misbehaves.
-
-    Successful parses are cached by exact query string, so re-searching with only a filter changed
-    costs no LLM call. A failed parse deliberately raises past the cache: caching the degraded
-    fallback would pin one DeepSeek outage to that query for the life of the process."""
+    """Parse into {semantic_query, event_category, action_taken, keywords}; on failure fall back to
+    a filter-free semantic search. Only successful parses are cached — caching the degraded fallback
+    would pin one DeepSeek outage to that query for the life of the process."""
     try:
         parsed = _parse_via_llm(text)
     except Exception:

@@ -6,8 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class Filters(BaseModel):
-    """Hard filters the caller sets directly (UI chips). Applied as index gates before ranking.
-    These bind straight to indexed columns — see Prep/db/init/02_indexes.sql."""
+    """UI chips. Bind straight to indexed columns, so they gate the set before ranking."""
     event_category: Optional[str] = None
     action_taken: Optional[str] = None
     code: Optional[str] = None
@@ -48,8 +47,8 @@ class SearchResponse(BaseModel):
 
 
 class CorpusStats(BaseModel):
-    """How much record there actually is. The UI quotes this when a search finds nothing, so it
-    reports the real newest date rather than claiming "current"."""
+    """Quoted by the UI when a search finds nothing, so `newest` is the real last notice loaded —
+    never "current"."""
     notice_count: int
     oldest: Optional[date]
     newest: Optional[date]

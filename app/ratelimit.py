@@ -1,14 +1,12 @@
-"""Rate limiting for the paid routes, backed by Redis so the counts stay correct across the two
-uvicorn workers (each worker is a separate process with its own memory — see docker-compose.yml).
+"""Rate limiting for the paid routes. Counters live in Redis because each uvicorn worker is its own
+process, so in-memory counts would be per-worker.
 
-Four guards:
-  - per-IP per-minute   -> 429  (a human burst limit)
-  - per-IP per-day      -> 429  (one visitor can't drain the day)
-  - whole-service/day   -> 503  (a hard daily budget ceiling on LLM spend)
-  - concurrent /ask runs -> 503 (per worker; reject fast instead of queueing 30s behind others)
+  per-IP minute     -> 429   burst limit
+  per-IP day        -> 429   one visitor can't drain the day
+  service day       -> 503   hard ceiling on LLM spend
+  concurrent /ask   -> 503   per worker
 
-Fail-OPEN by design: if Redis is unreachable we allow the request rather than take the API down —
-availability matters more than a perfectly enforced limit for a demo.
+Fails OPEN: a Redis outage allows traffic rather than taking the API down.
 """
 import threading
 from datetime import datetime, timezone
@@ -26,8 +24,7 @@ PER_DAY = int(cfg.RATE_PER_DAY)
 
 
 def _client_ip(request: Request) -> str:
-    """The visitor's IP. Behind a proxy/Cloudflare the real IP is the first X-Forwarded-For entry;
-    otherwise it's the socket peer."""
+    """Behind Cloudflare the real IP is the first X-Forwarded-For entry, not the socket peer."""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -35,7 +32,7 @@ def _client_ip(request: Request) -> str:
 
 
 def _hit(key: str, ttl_seconds: int) -> int:
-    """Count one hit against a fixed-window key, setting the window's expiry on first use."""
+    """One hit on a fixed-window key; the expiry is set on first use."""
     count = _redis.incr(key)
     if count == 1:
         _redis.expire(key, ttl_seconds)
@@ -49,8 +46,7 @@ def _seconds_until_utc_midnight() -> int:
 
 
 def enforce_rate_limits(request: Request) -> None:
-    """FastAPI dependency for the paid routes. Raises 429 (per-IP) / 503 (service cap). Fails open
-    on any Redis error so an outage never blocks traffic."""
+    """FastAPI dependency for the paid routes. 429 per-IP, 503 for the service cap."""
     try:
         ip = _client_ip(request)
         now = datetime.now(timezone.utc)
@@ -71,11 +67,10 @@ def enforce_rate_limits(request: Request) -> None:
                                 headers={"Retry-After": str(ttl_day)})
 
     except redis.RedisError:
-        return   # fail open — don't let a Redis blip take the API down
+        return   # fail open
 
 
-# Per-worker cap on simultaneous agent runs. Non-blocking acquire: reject fast with a 503 rather
-# than making the caller wait 30s behind others (2 workers x ASK_CONCURRENCY = the global ceiling).
+# Non-blocking acquire: reject fast rather than make the caller wait 30s behind other runs.
 _ask_slots = threading.BoundedSemaphore(cfg.ASK_CONCURRENCY)
 
 
@@ -89,4 +84,4 @@ def release_ask_slot() -> None:
     try:
         _ask_slots.release()
     except ValueError:
-        pass   # already released — never raise from a cleanup path
+        pass   # already released — never raise from cleanup
