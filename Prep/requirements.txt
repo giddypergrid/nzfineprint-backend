@@ -6,3 +6,4 @@ python-dotenv>=1.0      # shared/config
 psycopg[binary]>=3.1    # load / enrich / vectorize: Postgres
 openai>=1.30            # enrich: DeepSeek, OpenAI-compatible
 pgvector>=0.3           # vectorize: register_vector adapter
+redis>=5.0              # refresh_stats: publish the counts the API serves
