@@ -1,26 +1,52 @@
-"""Corpus stats, read from Redis only.
+"""Corpus stats: Redis first, Postgres as the fallback.
 
-The updater recomputes and publishes them after each nightly load (Prep/pipeline/refresh_stats.py),
-so the API never runs count(*) over the whole table for a number that changes once a day.
+Redis is an optimisation, not a dependency. The nightly updater publishes the numbers
+(Prep/pipeline/refresh_stats.py) and the normal request just reads them — but a miss, whether from a
+cold deploy, a restart or an eviction, falls through to the DB, caches the answer in-process, and
+writes it back so the next request is served from Redis again.
 
-No DB fallback on purpose: falling back would reintroduce the scan on exactly the requests where
-Redis is already struggling. Redis keeps the key through restarts (appendonly) and through memory
-pressure (volatile-lru only evicts keys with a TTL) — see docker-compose.yml.
+That write-back is why no deploy step is needed to seed Redis: the first request repopulates it.
 """
 import json
+import time
 
 import redis
 
 from app import config as cfg
+from app.search import engine
 
 _redis = redis.from_url(cfg.REDIS_URL, decode_responses=True,
                         socket_connect_timeout=1, socket_timeout=1)
 
+_process_cache: tuple[float, dict] | None = None
 
-def corpus_stats() -> dict | None:
-    """None when the key is missing or Redis is unreachable; the caller turns that into a 503."""
+
+def corpus_stats() -> dict:
+    """Always returns. The in-process cache is what makes a Redis outage cheap: without it every
+    request would scan the table; with it the worst case is one scan per worker per TTL."""
+    global _process_cache
+    if _process_cache and time.monotonic() - _process_cache[0] < cfg.STATS_CACHE_SECONDS:
+        return _process_cache[1]
+
+    stats = _read_redis() or _rebuild_from_db()
+    _process_cache = (time.monotonic(), stats)
+    return stats
+
+
+def _read_redis() -> dict | None:
     try:
         raw = _redis.get(cfg.STATS_KEY)
     except redis.RedisError:
         return None
     return json.loads(raw) if raw else None
+
+
+def _rebuild_from_db() -> dict:
+    """Scan, then republish. A failed write-back is not fatal — the in-process cache still absorbs
+    the load until the nightly refresh puts it right."""
+    stats = engine.compute_corpus_stats()
+    try:
+        _redis.set(cfg.STATS_KEY, json.dumps(stats, default=str))
+    except redis.RedisError:
+        pass
+    return stats

@@ -3,3 +3,5 @@
 # The hour is in the container's TZ (Pacific/Auckland, set on the updater service), so this is
 # midnight NZ even when the host server runs UTC.
 0 0 * * * sh /app/run_update.sh
+# 3am, well clear of the update so a dump never runs mid-load.
+0 3 * * * sh /app/run_backup.sh
