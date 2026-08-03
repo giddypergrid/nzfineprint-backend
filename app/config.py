@@ -27,8 +27,10 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "baai/bge-m3")
 DEFAULT_LIMIT = int(os.getenv("SEARCH_DEFAULT_LIMIT", "20"))
 MAX_LIMIT = int(os.getenv("SEARCH_MAX_LIMIT", "100"))
 
-# Where the updater publishes the corpus stats. The API reads this and never counts rows itself.
+# Where the updater publishes the corpus stats. Redis is the fast path; the TTL bounds how often a
+# Redis miss can fall through to a full table scan.
 STATS_KEY = os.getenv("STATS_KEY", "fineprint:stats")
+STATS_CACHE_SECONDS = int(os.getenv("STATS_CACHE_SECONDS", "3600"))
 
 # Set to the real frontend domain(s) in production.
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")

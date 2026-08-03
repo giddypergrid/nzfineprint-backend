@@ -21,8 +21,9 @@ services:
       timeout: 3s
       retries: 10
 
-  # Rate-limit counters AND the corpus stats the API serves. Two consequences:
-  #   appendonly yes  — stats must survive a restart; there is no DB fallback by design
+  # Rate-limit counters AND the corpus stats. Losing either is survivable (the API rebuilds stats
+  # from the DB), but both settings keep that from happening on every restart:
+  #   appendonly yes  — the stats key survives a restart
   #   volatile-lru    — evict only keys that have a TTL (the counters), never the stats key
   redis:
     image: redis:7-alpine

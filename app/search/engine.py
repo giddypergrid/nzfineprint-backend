@@ -75,6 +75,31 @@ def _rank_then_newest_first(score_sql: str, conditions: list[str]) -> str:
     """
 
 
+_STATS_TOTALS = "SELECT count(*) AS notice_count, min(date) AS oldest, max(date) AS newest FROM notices"
+_STATS_PER_YEAR = """
+    SELECT EXTRACT(YEAR FROM date)::int AS year, count(*)::int AS count
+    FROM notices WHERE date IS NOT NULL
+    GROUP BY 1 ORDER BY 1
+"""
+
+
+def compute_corpus_stats() -> dict:
+    """Scans the table, so callers must cache — this is the fallback for when Redis has nothing,
+    not the request path. See app/stats.py."""
+    with _connect() as connection, connection.cursor() as cursor:
+        cursor.execute(_STATS_TOTALS)
+        totals = cursor.fetchone()
+        cursor.execute(_STATS_PER_YEAR)
+        yearly = cursor.fetchall()
+
+    return {
+        "notice_count": totals["notice_count"],
+        "oldest": str(totals["oldest"]) if totals["oldest"] else None,
+        "newest": str(totals["newest"]) if totals["newest"] else None,
+        "yearly": yearly,
+    }
+
+
 def get_notice(notice_id: str) -> Optional[dict]:
     """Shared by /notices/{id} and the agent's drill-in tool so both return identical records."""
     sql = f"SELECT {_SELECT_COLS} FROM notices WHERE id = %(id)s"

@@ -54,11 +54,8 @@ def health():
 
 @app.get("/stats", response_model=CorpusStats)
 def stats():
-    """Read from Redis, where the nightly updater publishes it. Unmetered — no DB, no LLM."""
-    found = stats_store.corpus_stats()
-    if not found:
-        raise HTTPException(status_code=503, detail="Stats are not available yet.")
-    return found
+    """Served from Redis, rebuilt from the DB on a miss. Unmetered — cheap and LLM-free."""
+    return stats_store.corpus_stats()
 
 
 @app.get("/notices/{notice_id}", response_model=Notice)
