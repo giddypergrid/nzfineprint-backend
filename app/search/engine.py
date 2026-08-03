@@ -1,10 +1,11 @@
 """Run a search against the notices table. Two routes share one filter builder:
 
   keyword   -> full-text (search_vector @@ query) ranked by ts_rank, filters as index gates.
-  semantic  -> same filters gate the set, then ORDER BY embedding <=> query_vector (cosine).
+  semantic  -> same filters gate the set, then rank by embedding <=> query_vector (cosine).
 
 Filters bind to indexed columns (Prep/db/init/02_indexes.sql) so the gate is cheap; ranking
-runs only over what survives the gate.
+runs only over what survives the gate. Both routes then hand off to _rank_then_newest_first:
+relevance chooses the rows, the page shows them newest-first.
 """
 import time
 
@@ -61,6 +62,25 @@ def _where(conditions: list[str]) -> str:
     return ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
 
+def _rank_then_newest_first(score_sql: str, conditions: list[str]) -> str:
+    """Relevance picks WHICH rows come back; date decides the order they are shown in.
+
+    The two have to happen in separate stages. Ordering the outer query by date alone drops
+    relevance entirely — on the semantic route nothing in WHERE depends on the query (the vector is
+    only in the SELECT list), so `ORDER BY date DESC LIMIT n` returns the newest n notices in the
+    table for every search, identical no matter what was typed."""
+    return f"""
+        SELECT * FROM (
+            SELECT {_SELECT_COLS}, {score_sql} AS score
+            FROM notices
+            {_where(conditions)}
+            ORDER BY score DESC, date DESC
+            LIMIT %(limit)s
+        ) ranked
+        ORDER BY date DESC
+    """
+
+
 _stats_cache: Optional[tuple[float, dict]] = None
 
 
@@ -81,6 +101,15 @@ def corpus_stats() -> dict:
 
     _stats_cache = (time.monotonic(), stats)
     return stats
+
+
+def get_notice(notice_id: str) -> Optional[dict]:
+    """One notice by id. Backs the shareable /notices/{id} page and the agent's drill-in tool, so
+    both return byte-identical records."""
+    sql = f"SELECT {_SELECT_COLS} FROM notices WHERE id = %(id)s"
+    with _connect() as connection, connection.cursor() as cursor:
+        cursor.execute(sql, {"id": notice_id})
+        return cursor.fetchone()
 
 
 def search_keyword(query: str, filters: Filters, limit: int) -> tuple[list[dict], str]:
@@ -107,7 +136,8 @@ def _search_fulltext(query: str, filters: Filters, limit: int) -> list[dict]:
     Punctuation-safe (O'Brien, co.); 'simple' config (no stemming) must match search_vector's own
     config — see 02_indexes.sql.
 
-    Rank = length-normalised ts_rank + significance - bulk-list penalty:
+    Rank decides which notices make the page (they are then listed newest-first, see
+    _rank_then_newest_first) = length-normalised ts_rank + significance - bulk-list penalty:
       - Plain ts_rank counts term FREQUENCY, so a giant "800 companies to be removed" list (repeats a
         word dozens of times) buried the real single-company notice. The `1` flag divides by
         log(length) to undo that.
@@ -117,22 +147,16 @@ def _search_fulltext(query: str, filters: Filters, limit: int) -> list[dict]:
         notice is a few hundred chars, a mass list is tens of thousands. The penalty maxes out (-1.0)
         past ~20k chars. Adjacency already handles multi-word queries; this still earns its keep on
         SINGLE-word ones ("liquidation"), where a phrase is just the one term and can't discriminate.
-    Verified: 'Du Val'/'Smiths City' return the real receivership first; 'liquidation' returns CBL,
+    Verified: 'Du Val'/'Smiths City' surface the real receivership; 'liquidation' returns CBL,
     Blue Chip, Ruapehu; 'Sacred Hill'/'wine liquidation' no longer surface the bulk-removal lists."""
     params: dict = {"q": query, "limit": limit}
     conditions = ["search_vector @@ phraseto_tsquery('simple', %(q)s)"]
     conditions += _filter_sql(filters, params)
 
-    sql = f"""
-        SELECT {_SELECT_COLS},
-               ts_rank(search_vector, phraseto_tsquery('simple', %(q)s), 1)
-                 + COALESCE(significance_score, 0) / 100.0
-                 - LEAST(length(COALESCE(fulltext, '')) / 20000.0, 1.0) AS score
-        FROM notices
-        {_where(conditions)}
-        ORDER BY date DESC
-        LIMIT %(limit)s
-    """
+    score_sql = """ts_rank(search_vector, phraseto_tsquery('simple', %(q)s), 1)
+                     + COALESCE(significance_score, 0) / 100.0
+                     - LEAST(length(COALESCE(fulltext, '')) / 20000.0, 1.0)"""
+    sql = _rank_then_newest_first(score_sql, conditions)
     with _connect() as connection, connection.cursor() as cursor:
         cursor.execute(sql, params)
         return cursor.fetchall()
@@ -171,14 +195,7 @@ def search_semantic(semantic_query: str, filters: Filters, limit: int,
         bonus_sql = (f"(CASE WHEN search_vector @@ websearch_to_tsquery('simple', %(kw)s) "
                      f"THEN {KEYWORD_BONUS} ELSE 0 END)")
 
-    sql = f"""
-        SELECT {_SELECT_COLS},
-               (1 - (embedding <=> %(vec)s)) + {bonus_sql} AS score
-        FROM notices
-        {_where(conditions)}
-        ORDER BY date DESC
-        LIMIT %(limit)s
-    """
+    sql = _rank_then_newest_first(f"(1 - (embedding <=> %(vec)s)) + {bonus_sql}", conditions)
     with _connect() as connection, connection.cursor() as cursor:
         cursor.execute(sql, params)
         return cursor.fetchall()

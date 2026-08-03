@@ -1,3 +1,8 @@
 .env
 __pycache__/
 *.py[cod]
+.venv/
+
+# Pulled JSONL + checkpoint (372MB and growing). Bind-mounted at ./Prep/data at runtime, so a copy
+# baked into the image is dead weight that the mount hides anyway.
+data/

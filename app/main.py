@@ -16,7 +16,7 @@ from app import ratelimit
 from app.agent import loop as agent_loop
 from app.agent.schemas import AskRequest, AskResponse
 from app.search import engine, pipeline
-from app.search.schemas import CorpusStats, SearchRequest, SearchResponse
+from app.search.schemas import CorpusStats, Notice, SearchRequest, SearchResponse
 
 
 @asynccontextmanager
@@ -58,6 +58,16 @@ def stats():
     """Size and date span of the record, for the UI to quote. Cached, and free of LLM cost, so it
     stays outside the rate limiter."""
     return engine.corpus_stats()
+
+
+@app.get("/notices/{notice_id}", response_model=Notice)
+def notice(notice_id: str):
+    """One notice by id, so a result has its own address — the page survives a reload, a share and
+    the browser Back button. Pure DB read with no LLM cost, so like /stats it stays unmetered."""
+    found = engine.get_notice(notice_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="No notice with that id.")
+    return found
 
 
 @app.post("/search", response_model=SearchResponse, dependencies=_LIMITED)

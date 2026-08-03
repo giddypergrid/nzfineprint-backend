@@ -38,13 +38,7 @@ def search_notices(query: str, event_category: Optional[str] = None,
 
 def get_notice(notice_id: str) -> Optional[dict]:
     """Drill into ONE notice — the full plain-language decode + source text + parties + link."""
-    sql = """SELECT id, date, type, headline, plain_english, event_category, action_taken,
-                    affected_parties, significance_score, significance_reason, title, fulltext,
-                    landing_url
-             FROM notices WHERE id = %(id)s"""
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, {"id": notice_id})
-        return cur.fetchone()
+    return engine.get_notice(notice_id)
 
 
 def get_company_history(nzbn: Optional[str] = None, company_number: Optional[str] = None,

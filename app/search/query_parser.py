@@ -48,27 +48,39 @@ When unsure, use null and let the semantic match do the work.
 Respond with ONLY the JSON object. No preamble, no code fences."""
 
 
-@lru_cache(maxsize=cfg.SEMANTIC_PARSE_CACHE_SIZE)
 def parse_semantic_query(text: str) -> dict:
     """LLM-parse a natural-language query into {semantic_query, event_category, action_taken, keywords}.
     Falls back to a filter-free semantic search if the model/JSON misbehaves.
-    Cached by exact query string — re-searching with only a filter changed skips the LLM call."""
-    client = OpenAI(api_key=cfg.DEEPSEEK_API_KEY, base_url=cfg.DEEPSEEK_BASE_URL)
+
+    Successful parses are cached by exact query string, so re-searching with only a filter changed
+    costs no LLM call. A failed parse deliberately raises past the cache: caching the degraded
+    fallback would pin one DeepSeek outage to that query for the life of the process."""
     try:
-        response = client.chat.completions.create(
-            model=cfg.DEEPSEEK_MODEL,
-            response_format={"type": "json_object"},
-            max_tokens=300,
-            extra_body={"thinking": {"type": "disabled"}},  # flash reasons by default; off for extraction
-            messages=[
-                {"role": "system", "content": _PARSE_SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-        )
-        parsed = json.loads(response.choices[0].message.content)
+        parsed = _parse_via_llm(text)
     except Exception:
         parsed = {}
+    return dict(_shape(parsed, text))   # copy — callers must not be able to mutate the cached dict
 
+
+@lru_cache(maxsize=cfg.SEMANTIC_PARSE_CACHE_SIZE)
+def _parse_via_llm(text: str) -> dict:
+    """Raw DeepSeek extraction. Raises on transport/JSON failure so nothing gets cached."""
+    client = OpenAI(api_key=cfg.DEEPSEEK_API_KEY, base_url=cfg.DEEPSEEK_BASE_URL)
+    response = client.chat.completions.create(
+        model=cfg.DEEPSEEK_MODEL,
+        response_format={"type": "json_object"},
+        max_tokens=300,
+        extra_body={"thinking": {"type": "disabled"}},  # flash reasons by default; off for extraction
+        messages=[
+            {"role": "system", "content": _PARSE_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ],
+    )
+    return json.loads(response.choices[0].message.content)
+
+
+def _shape(parsed: dict, text: str) -> dict:
+    """Force whatever the model returned into the contract the search pipeline relies on."""
     return {
         "semantic_query": (parsed.get("semantic_query") or text).strip(),
         "event_category": _valid(parsed.get("event_category"), EVENT_CATEGORIES),
