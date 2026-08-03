@@ -18,6 +18,9 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
+# Same query string (e.g. user just changed a filter, not the search box) skips a repeat LLM parse.
+SEMANTIC_PARSE_CACHE_SIZE = int(os.getenv("SEMANTIC_PARSE_CACHE_SIZE", "512"))
+
 # Query embedding — hosted bge-m3 (OpenAI-compatible), 1024-dim, no instruction prefix.
 # MUST be the same model Prep/pipeline/vectorize.py used on the documents, or the vectors live in
 # different spaces and results are nonsense. Both sides read this same model id from their .env.
@@ -28,6 +31,9 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "baai/bge-m3")
 # Retrieval knobs.
 DEFAULT_LIMIT = int(os.getenv("SEARCH_DEFAULT_LIMIT", "20"))
 MAX_LIMIT = int(os.getenv("SEARCH_MAX_LIMIT", "100"))
+
+# How long /stats reuses its last count. Only changes when the updater loads notices.
+STATS_CACHE_SECONDS = int(os.getenv("STATS_CACHE_SECONDS", "3600"))
 
 # CORS — comma-separated origins allowed to call the API from a browser. Defaults to the local
 # Vite dev server; set to the real frontend domain(s) in production.

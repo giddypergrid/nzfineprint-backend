@@ -45,3 +45,11 @@ class SearchResponse(BaseModel):
     parsed: Optional[dict] = None   # what the LLM extracted (semantic route), for transparency
     count: int
     results: list[Notice]
+
+
+class CorpusStats(BaseModel):
+    """How much record there actually is. The UI quotes this when a search finds nothing, so it
+    reports the real newest date rather than claiming "current"."""
+    notice_count: int
+    oldest: Optional[date]
+    newest: Optional[date]

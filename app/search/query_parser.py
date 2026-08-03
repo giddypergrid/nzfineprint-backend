@@ -10,13 +10,14 @@ Routing is word-count only (<=4 words -> keyword): keeps the LLM off the majorit
 (people type 2-3 words), so most searches are near-instant and free.
 """
 import json
+from functools import lru_cache
 
 from openai import OpenAI
 
 from app import config as cfg
 from app.search.facets import EVENT_CATEGORIES, ACTION_TYPES
 
-_MAX_KEYWORD_WORDS = 4  # at/under this -> keyword route; above -> LLM parse + semantic
+_MAX_KEYWORD_WORDS = 3  # at/under this -> keyword route; above -> LLM parse + semantic
 
 
 def looks_like_sentence(text: str) -> bool:
@@ -47,9 +48,11 @@ When unsure, use null and let the semantic match do the work.
 Respond with ONLY the JSON object. No preamble, no code fences."""
 
 
+@lru_cache(maxsize=cfg.SEMANTIC_PARSE_CACHE_SIZE)
 def parse_semantic_query(text: str) -> dict:
     """LLM-parse a natural-language query into {semantic_query, event_category, action_taken, keywords}.
-    Falls back to a filter-free semantic search if the model/JSON misbehaves."""
+    Falls back to a filter-free semantic search if the model/JSON misbehaves.
+    Cached by exact query string — re-searching with only a filter changed skips the LLM call."""
     client = OpenAI(api_key=cfg.DEEPSEEK_API_KEY, base_url=cfg.DEEPSEEK_BASE_URL)
     try:
         response = client.chat.completions.create(
