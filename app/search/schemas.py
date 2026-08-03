@@ -46,9 +46,15 @@ class SearchResponse(BaseModel):
     results: list[Notice]
 
 
+class YearCount(BaseModel):
+    year: int
+    count: int
+
+
 class CorpusStats(BaseModel):
     """Quoted by the UI when a search finds nothing, so `newest` is the real last notice loaded —
-    never "current"."""
+    never "current". `yearly` backs the front-page chart, which used to hardcode its numbers."""
     notice_count: int
     oldest: Optional[date]
     newest: Optional[date]
+    yearly: list[YearCount] = []

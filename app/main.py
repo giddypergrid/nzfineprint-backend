@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from app import config as cfg
 from app import ratelimit
+from app import stats as stats_store
 from app.agent import loop as agent_loop
 from app.agent.schemas import AskRequest, AskResponse
 from app.search import engine, pipeline
@@ -53,8 +54,11 @@ def health():
 
 @app.get("/stats", response_model=CorpusStats)
 def stats():
-    """Size and date span, for the UI to quote. Cached and LLM-free, so it stays unmetered."""
-    return engine.corpus_stats()
+    """Read from Redis, where the nightly updater publishes it. Unmetered — no DB, no LLM."""
+    found = stats_store.corpus_stats()
+    if not found:
+        raise HTTPException(status_code=503, detail="Stats are not available yet.")
+    return found
 
 
 @app.get("/notices/{notice_id}", response_model=Notice)

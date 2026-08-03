@@ -19,6 +19,10 @@ SOURCE_STAMP = "New Zealand Gazette (CC BY 3.0 NZ)"
 # stalls ~8s before falling back to IPv4. The literal IP skips that entirely (~0.07s).
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://fineprint:fineprint@127.0.0.1:5432/fineprint")
 
+# --- Redis (refresh_stats publishes here; the API reads it and never counts rows itself) ---
+REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+STATS_KEY = os.getenv("STATS_KEY", "fineprint:stats")
+
 # --- DeepSeek (enrichment) ---
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"

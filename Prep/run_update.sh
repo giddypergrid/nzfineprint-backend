@@ -13,4 +13,7 @@ python -m pipeline.update
 echo "[$(stamp)] vectorize: embedding new rows"
 python -m pipeline.vectorize
 
+echo "[$(stamp)] refresh stats -> redis"
+python -m pipeline.refresh_stats
+
 echo "[$(stamp)] daily update complete"

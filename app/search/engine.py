@@ -6,8 +6,6 @@
 Filters bind to indexed columns (Prep/db/init/02_indexes.sql), so the gate is cheap and ranking
 runs only over survivors. Relevance picks the rows; the page lists them newest-first.
 """
-import time
-
 from typing import Optional
 
 import psycopg
@@ -75,25 +73,6 @@ def _rank_then_newest_first(score_sql: str, conditions: list[str]) -> str:
         ) ranked
         ORDER BY date DESC
     """
-
-
-_stats_cache: Optional[tuple[float, dict]] = None
-
-
-def corpus_stats() -> dict:
-    """Row count and date span. Cached because count(*) scans the table, and read live because the
-    UI quotes it on the zero-result page — a hardcoded total drifts every time the updater runs."""
-    global _stats_cache
-    if _stats_cache and time.monotonic() - _stats_cache[0] < cfg.STATS_CACHE_SECONDS:
-        return _stats_cache[1]
-
-    sql = "SELECT count(*) AS notice_count, min(date) AS oldest, max(date) AS newest FROM notices"
-    with _connect() as connection, connection.cursor() as cursor:
-        cursor.execute(sql)
-        stats = cursor.fetchone()
-
-    _stats_cache = (time.monotonic(), stats)
-    return stats
 
 
 def get_notice(notice_id: str) -> Optional[dict]:
