@@ -1,23 +1,18 @@
-"""
-Embed each enriched notice into its `embedding` vector, using the hosted embedding API
-(default baai/bge-m3, 1024-dim — matches the vector(1024) column).
+"""Embed each enriched notice into its `embedding` column via the hosted API.
 
-We embed `plain_english`, NOT `fulltext`: the LLM decode already stripped the legal boilerplate,
-so the vector represents meaning, not shared template noise. Only rows that are enriched
-(plain_english present) but not yet embedded are processed — so this runs after enrich and is
-resumable (re-run picks up where it stopped).
+Embeds `plain_english`, not `fulltext` — the LLM decode already stripped the legal boilerplate, so
+the vector carries meaning rather than shared template noise. Only enriched-but-unembedded rows are
+touched, which makes it resumable.
 
-No local model: the same hosted endpoint embeds documents here and queries at search time, so both
-sides are guaranteed to live in the same vector space. bge-m3 takes NO instruction prefix — if you
-ever switch back to a bge-*-en-v1.5 model, the doc AND query sides must both add their prefixes
-again or retrieval silently degrades.
+Same hosted endpoint embeds documents here and queries at search time, so both sides are guaranteed
+to share a vector space. Switching to a bge-*-en-v1.5 model means adding prefixes on BOTH sides or
+retrieval silently degrades.
 
-Design — one API call per EMBED_BATCH texts, written back to the DB a chunk at a time:
-  read EMBED_CHUNK rows -> embed in EMBED_BATCH-sized API calls -> write the chunk back.
+  read EMBED_CHUNK rows -> embed in EMBED_BATCH-sized calls -> write the chunk back
 
-Run from the Prep/ folder:
-  python -m pipeline.vectorize --limit 100   # test on 100 rows
-  python -m pipeline.vectorize               # all enriched-but-unembedded rows
+Run from Prep/:
+  python -m pipeline.vectorize --limit 100
+  python -m pipeline.vectorize
 """
 import argparse
 import json
@@ -42,8 +37,8 @@ MAX_RETRIES = 5
 
 
 def embed_texts_via_api(texts):
-    """Embed a list of texts in ONE API call; returns vectors in the same order as the input.
-    Retries with backoff — a whole chunk shouldn't be lost to one blip."""
+    """One API call; vectors come back in input order. Retries with backoff so a whole chunk isn't
+    lost to one blip."""
     payload = json.dumps({"model": cfg.EMBED_MODEL, "input": texts}).encode("utf-8")
     request = urllib.request.Request(f"{cfg.EMBED_API_BASE}/embeddings", data=payload, headers={
         "Authorization": f"Bearer {cfg.EMBED_API_KEY}",
@@ -56,8 +51,7 @@ def embed_texts_via_api(texts):
                 data = json.load(response)
             ordered = sorted(data["data"], key=lambda item: item["index"])
 
-            # Coerce every component to float: JSON gives exact 0/1 back as ints, and psycopg
-            # refuses a mixed int/float list ("cannot dump lists of mixed types").
+            # JSON returns exact 0/1 as ints, and psycopg refuses a mixed int/float list.
             return [[float(component) for component in item["embedding"]] for item in ordered]
 
         except Exception as error:
