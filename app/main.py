@@ -15,8 +15,8 @@ from app import config as cfg
 from app import ratelimit
 from app.agent import loop as agent_loop
 from app.agent.schemas import AskRequest, AskResponse
-from app.search import pipeline
-from app.search.schemas import SearchRequest, SearchResponse
+from app.search import engine, pipeline
+from app.search.schemas import CorpusStats, SearchRequest, SearchResponse
 
 
 @asynccontextmanager
@@ -51,6 +51,13 @@ _LIMITED = [Depends(ratelimit.enforce_rate_limits)]
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/stats", response_model=CorpusStats)
+def stats():
+    """Size and date span of the record, for the UI to quote. Cached, and free of LLM cost, so it
+    stays outside the rate limiter."""
+    return engine.corpus_stats()
 
 
 @app.post("/search", response_model=SearchResponse, dependencies=_LIMITED)

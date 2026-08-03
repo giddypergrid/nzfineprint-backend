@@ -6,6 +6,8 @@
 Filters bind to indexed columns (Prep/db/init/02_indexes.sql) so the gate is cheap; ranking
 runs only over what survives the gate.
 """
+import time
+
 from typing import Optional
 
 import psycopg
@@ -59,6 +61,28 @@ def _where(conditions: list[str]) -> str:
     return ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
 
+_stats_cache: Optional[tuple[float, dict]] = None
+
+
+def corpus_stats() -> dict:
+    """Row count and date span of the record, straight from the table.
+
+    The UI quotes these numbers on a zero-result page, which is the one screen whose whole job is to
+    be believed — so a hardcoded total is not an option, it drifts silently every time the updater
+    runs. count(*) scans the table, so the answer is cached for STATS_CACHE_SECONDS."""
+    global _stats_cache
+    if _stats_cache and time.monotonic() - _stats_cache[0] < cfg.STATS_CACHE_SECONDS:
+        return _stats_cache[1]
+
+    sql = "SELECT count(*) AS notice_count, min(date) AS oldest, max(date) AS newest FROM notices"
+    with _connect() as connection, connection.cursor() as cursor:
+        cursor.execute(sql)
+        stats = cursor.fetchone()
+
+    _stats_cache = (time.monotonic(), stats)
+    return stats
+
+
 def search_keyword(query: str, filters: Filters, limit: int) -> tuple[list[dict], str]:
     """Exact phrase match, and nothing else — empty means the record genuinely has no such notice.
 
@@ -106,7 +130,7 @@ def _search_fulltext(query: str, filters: Filters, limit: int) -> list[dict]:
                  - LEAST(length(COALESCE(fulltext, '')) / 20000.0, 1.0) AS score
         FROM notices
         {_where(conditions)}
-        ORDER BY score DESC, date DESC
+        ORDER BY date DESC
         LIMIT %(limit)s
     """
     with _connect() as connection, connection.cursor() as cursor:
@@ -152,7 +176,7 @@ def search_semantic(semantic_query: str, filters: Filters, limit: int,
                (1 - (embedding <=> %(vec)s)) + {bonus_sql} AS score
         FROM notices
         {_where(conditions)}
-        ORDER BY score DESC
+        ORDER BY date DESC
         LIMIT %(limit)s
     """
     with _connect() as connection, connection.cursor() as cursor:
