@@ -16,4 +16,7 @@ python -m pipeline.vectorize
 echo "[$(stamp)] refresh stats -> redis"
 python -m pipeline.refresh_stats
 
+echo "[$(stamp)] prune request logs past retention"
+python -m pipeline.prune_logs
+
 echo "[$(stamp)] daily update complete"

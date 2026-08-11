@@ -52,9 +52,13 @@ services:
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: ${CORS_ORIGINS}
       ENABLE_DOCS: ${ENABLE_DOCS}
+      REQUEST_LOG_DIR: /app/logs
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",
               "--workers", "2", "--limit-concurrency", "25", "--backlog", "128",
               "--timeout-keep-alive", "5"]
+    volumes:
+      # Same host dir the updater sees at /app/data/logs, so the nightly job can prune what we write.
+      - ./Prep/data/logs:/app/logs
     expose:
       - "8000"                      # internal only — Caddy reaches it over the shared `web` network
     networks: [default, web]        # default: talks to db/redis; web: reachable by the Caddy container
@@ -104,6 +108,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0      # refresh_stats publishes here at the end of each run
       TZ: Pacific/Auckland                 # makes "0 0 * * *" mean midnight NZ even on a UTC host
+      REQUEST_LOG_DIR: /app/data/logs      # what the app writes; prune_logs is the only deleter
     volumes:
       - ./Prep/data:/app/data             # keep the pull checkpoint across runs
     command: ["supercronic", "/app/crontab"]
