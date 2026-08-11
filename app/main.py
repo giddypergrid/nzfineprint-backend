@@ -72,7 +72,10 @@ def notice(notice_id: str):
 @app.post("/search", response_model=SearchResponse, dependencies=_LIMITED)
 def search(request: SearchRequest, http_request: Request):
     """Keyword-shaped queries hit full-text; sentences are LLM-parsed then matched by embedding."""
-    payload = {"q": request.q, "filters": request.filters, "limit": request.limit}
+    # model_dump, not the model — json.dumps(default=str) would write its repr, and a filter you
+    # cannot grep or count is not worth logging.
+    payload = {"q": request.q, "limit": request.limit,
+               "filters": request.filters.model_dump(exclude_none=True)}
     with requestlog.record("/search", http_request, payload) as entry:
         try:
             found = pipeline.run_search(request.q, request.filters, request.limit)
