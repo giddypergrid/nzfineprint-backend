@@ -45,3 +45,10 @@ RATE_PER_DAY = os.getenv("RATE_PER_DAY", "100")                # per IP -> 429
 GLOBAL_DAILY_CAP = int(os.getenv("GLOBAL_DAILY_CAP", "500"))   # whole service -> 503
 ASK_CONCURRENCY = int(os.getenv("ASK_CONCURRENCY", "3"))       # agent runs per worker -> 503 when full
 API_THREADPOOL = int(os.getenv("API_THREADPOOL", "10"))        # sync-endpoint threads per worker
+
+# One JSONL line per request, a file per UTC day. Compose points this at the volume the updater also
+# mounts, so the nightly job can prune it. REQUEST_LOG_SALT keeps IP hashes stable across restarts —
+# unset, a random one is generated and persisted next to the logs.
+REQUEST_LOG_ENABLED = os.getenv("REQUEST_LOG_ENABLED", "true").lower() == "true"
+REQUEST_LOG_DIR = Path(os.getenv("REQUEST_LOG_DIR", "data/logs"))
+REQUEST_LOG_RETENTION_DAYS = int(os.getenv("REQUEST_LOG_RETENTION_DAYS", "30"))

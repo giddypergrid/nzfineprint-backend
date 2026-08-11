@@ -145,6 +145,11 @@ def append_rows_and_return_new_offset(handle, rows):
     return handle.tell()
 
 
+# How far back to restart when the cursor is found past the last page. Results are appended in date
+# order, so the tail pages are the ones that grow; a few pages of overlap is cheap and self-healing.
+CURSOR_REWIND_PAGES = int(os.getenv("PULL_CURSOR_REWIND_PAGES", "3"))
+
+
 def pull_one_year_page_by_page(session, handle, state, year):
     """Walk every page of a single year, checkpointing state after each page."""
     page = state["cursor_page"] if year == state["cursor_year"] else 1
@@ -155,6 +160,13 @@ def pull_one_year_page_by_page(session, handle, state, year):
         search = fetch_one_page_from_digitalnz(session, year, page)
         if pages is None:
             pages = max(1, math.ceil(search["result_count"] / cfg.PER_PAGE))
+            if page > pages:
+                # The cursor sat past the end of an open year, so every run fetched a page that does
+                # not exist, reported +0 and stepped one further out. Drop back to the live edge.
+                page = max(1, pages - CURSOR_REWIND_PAGES)
+                print(f"  {year} cursor was past page {pages} — rewinding to {page}")
+                time.sleep(cfg.THROTTLE_SECONDS)
+                search = fetch_one_page_from_digitalnz(session, year, page)
 
         rows = []
         for record in search["results"]:
@@ -163,7 +175,10 @@ def pull_one_year_page_by_page(session, handle, state, year):
                 rows.append(row)
 
         offset = append_rows_and_return_new_offset(handle, rows)
-        state.update(cursor_year=year, cursor_page=page + 1,
+        # Only step off a FULL page. A short page is the live edge of an open year — tomorrow's
+        # notices land on it, so it has to be re-read next run rather than skipped past.
+        at_live_edge = len(search["results"]) < cfg.PER_PAGE
+        state.update(cursor_year=year, cursor_page=page if at_live_edge else page + 1,
                      offset=offset, seen=state["seen"] + len(rows))
         write_state_file_atomically(state)
 
