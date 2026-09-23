@@ -24,6 +24,10 @@ EMBED_API_KEY = os.getenv("EMBED_API_KEY", "")
 EMBED_API_BASE = os.getenv("EMBED_API_BASE", "https://openrouter.ai/api/v1")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "baai/bge-m3")
 
+# Nearest neighbours the HNSW index returns before re-ranking with the keyword bonus.
+# Must stay <= 1000 (pgvector's hnsw.ef_search maximum).
+SEMANTIC_CANDIDATES = int(os.getenv("SEMANTIC_CANDIDATES", "200"))
+
 DEFAULT_LIMIT = int(os.getenv("SEARCH_DEFAULT_LIMIT", "20"))
 MAX_LIMIT = int(os.getenv("SEARCH_MAX_LIMIT", "100"))
 

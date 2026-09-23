@@ -155,11 +155,47 @@ def _keyword_tsquery_input(keywords: list[str]) -> str:
     return " or ".join(f'"{keyword}"' for keyword in cleaned if keyword)
 
 
+def _semantic_sql(conditions: list[str], bonus_sql: str) -> str:
+    """Index picks candidates, bonus re-ranks them, page lists newest first.
+
+    pgvector only uses HNSW for `ORDER BY embedding <=> vec LIMIT n`. Ordering by any expression
+    that contains the distance (like distance + keyword bonus) silently falls back to a full
+    scan of every vector (~8 s on the server), so the bonus is applied to the candidates only."""
+    return f"""
+        WITH candidates AS (
+            SELECT {_SELECT_COLS},
+                   embedding <=> %(vec)s AS distance,
+                   {bonus_sql} AS bonus
+            FROM notices
+            {_where(conditions)}
+            ORDER BY embedding <=> %(vec)s
+            LIMIT %(candidates)s
+        )
+        SELECT * FROM (
+            SELECT {_SELECT_COLS}, (1 - distance) + bonus AS score
+            FROM candidates
+            ORDER BY score DESC, date DESC
+            LIMIT %(limit)s
+        ) ranked
+        ORDER BY date DESC
+    """
+
+
+def _tune_hnsw(cursor, candidates: int) -> None:
+    """Per-transaction HNSW settings. ef_search caps how many rows the index can return, and
+    iterative scan keeps searching when filters discard most of the first batch.
+    set_config(..., true) because psycopg 3 binds server-side and SET can't take a parameter."""
+    cursor.execute("SELECT set_config('hnsw.ef_search', %s, true)", (str(candidates),))
+    cursor.execute("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)")
+
+
 def search_semantic(semantic_query: str, filters: Filters, limit: int,
                     keywords: Optional[list[str]] = None) -> list[dict]:
-    """Vector route: filters gate the set, then cosine similarity ranks it, plus a keyword bonus."""
+    """Vector route: filters gate the set, the HNSW index finds the nearest candidates, the keyword
+    bonus re-ranks them."""
     query_vector = Vector(embed_query(semantic_query))   # wrap so psycopg sends a vector, not float[]
-    params: dict = {"vec": query_vector, "limit": limit}
+    candidates = min(max(cfg.SEMANTIC_CANDIDATES, limit), 1000)
+    params: dict = {"vec": query_vector, "limit": limit, "candidates": candidates}
 
     conditions = ["embedding IS NOT NULL"]
     conditions += _filter_sql(filters, params)
@@ -170,7 +206,7 @@ def search_semantic(semantic_query: str, filters: Filters, limit: int,
         bonus_sql = (f"(CASE WHEN search_vector @@ websearch_to_tsquery('simple', %(kw)s) "
                      f"THEN {KEYWORD_BONUS} ELSE 0 END)")
 
-    sql = _rank_then_newest_first(f"(1 - (embedding <=> %(vec)s)) + {bonus_sql}", conditions)
     with _connect() as connection, connection.cursor() as cursor:
-        cursor.execute(sql, params)
+        _tune_hnsw(cursor, candidates)
+        cursor.execute(_semantic_sql(conditions, bonus_sql), params)
         return cursor.fetchall()
