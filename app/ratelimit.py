@@ -15,20 +15,13 @@ import redis
 from fastapi import HTTPException, Request
 
 from app import config as cfg
+from app.clientip import client_ip
 
 _redis = redis.from_url(cfg.REDIS_URL, decode_responses=True,
                         socket_connect_timeout=1, socket_timeout=1)
 
 PER_MINUTE = int(cfg.RATE_PER_MINUTE)
 PER_DAY = int(cfg.RATE_PER_DAY)
-
-
-def _client_ip(request: Request) -> str:
-    """Behind Cloudflare the real IP is the first X-Forwarded-For entry, not the socket peer."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _hit(key: str, ttl_seconds: int) -> int:
@@ -48,7 +41,7 @@ def _seconds_until_utc_midnight() -> int:
 def enforce_rate_limits(request: Request) -> None:
     """FastAPI dependency for the paid routes. 429 per-IP, 503 for the service cap."""
     try:
-        ip = _client_ip(request)
+        ip = client_ip(request)
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
         ttl_day = _seconds_until_utc_midnight()
