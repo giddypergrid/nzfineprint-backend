@@ -3,7 +3,12 @@ services:
   db:
     image: pgvector/pgvector:pg17
     restart: unless-stopped                # survives a server reboot/crash
-    mem_limit: 1536m                       # generous: shm_size below counts against this too
+    # The HNSW index alone is 1.6 GB. Under 1.5 GB it could never stay cached, so semantic
+    # searches read it from disk. 3 GB assumes the 8 GB host; lower both on a smaller box.
+    mem_limit: ${DB_MEM_LIMIT:-3g}         # shm_size below counts against this too
+    command: ["postgres",
+              "-c", "shared_buffers=${PG_SHARED_BUFFERS:-768MB}",
+              "-c", "effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-2GB}"]
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
