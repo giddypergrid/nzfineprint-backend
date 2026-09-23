@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from app import config as cfg
+from app.clientip import client_ip
 
 _write_lock = threading.Lock()      # two uvicorn workers append to the same file
 _salt_cache: str | None = None
@@ -48,11 +49,8 @@ def _hash_ip(ip: str) -> str:
 def describe_client(request) -> dict:
     """Who made the call, in the coarsest form that still answers "was this one person?"."""
     headers = request.headers
-    forwarded = headers.get("x-forwarded-for", "")
-    ip = forwarded.split(",")[0].strip() if forwarded else (
-        request.client.host if request.client else "unknown")
     return {
-        "ip_hash": _hash_ip(ip),
+        "ip_hash": _hash_ip(client_ip(request)),
         "country": headers.get("cf-ipcountry"),          # set by Cloudflare, absent in dev
         "ua": (headers.get("user-agent") or "")[:200],
         "referer": headers.get("referer"),
